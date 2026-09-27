@@ -73,6 +73,16 @@ PROMPTS = {
 }
 
 
+DEBUG = os.environ.get("LIT_DEBUG") == "1"  # local only: error text may echo inputs
+
+for _code in list(PROMPTS):
+    if f"LIT_PROMPT_{_code}" in os.environ:
+        PROMPTS[_code] = os.environ[f"LIT_PROMPT_{_code}"] or None
+for _code in list(LANG_MAP):
+    if f"LIT_LANG_{_code}" in os.environ:
+        LANG_MAP[_code] = os.environ[f"LIT_LANG_{_code}"] or None
+
+
 def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
 
@@ -131,7 +141,7 @@ def run_whisper(rows, results):
             results[name] = nahuatl_orthography(text) if code in NAHUATL else text
         except Exception as e:  # never let one clip kill the run
             results[name] = ""
-            log(f"whisper clip {i} failed: {type(e).__name__}")
+            log(f"whisper clip {i} failed: {type(e).__name__}" + (f" {e}"[:250] if DEBUG else ""))
         if (i + 1) % 50 == 0:
             log(f"whisper done {i + 1}/{len(rows)}")
     del pipe, model
