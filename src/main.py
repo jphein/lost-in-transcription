@@ -38,14 +38,17 @@ def _pick_omni() -> Path:
 
 
 OMNI_DIR = _pick_omni()
-HAVE_W, HAVE_O = WHISPER_DIR.exists(), OMNI_DIR.exists()
+QWEN_DIR = MODELS / os.environ.get("LIT_QWEN", "qwen3-asr-1.7b")
+HAVE_W, HAVE_O, HAVE_Q = WHISPER_DIR.exists(), OMNI_DIR.exists(), QWEN_DIR.exists()
+# Qwen3-ASR language names (no Javanese / Nahuatl support)
+QWEN_LANG = {"spa": "Spanish", "eng": "English", "enspa": None, "ind": "Indonesian"}
 
 # language code -> backend, based on what the zip ships. Whisper wins on
 # Spanish/English (casing, punctuation); Omnilingual CTC wins on Javanese
 # (FLEURS jv proxy: 25.7% vs 70% WER) and is the only model with Nahuatl.
 BACKENDS = {}
 for c in ["spa", "enspa", "eng"]:
-    BACKENDS[c] = "whisper" if HAVE_W else "omni"
+    BACKENDS[c] = "whisper" if HAVE_W else ("qwen" if HAVE_Q else "omni")
 for c in ["ind", "jav", "javind", "azz", "nhw", "nhi"]:
     BACKENDS[c] = "omni" if HAVE_O else "whisper"
 for kv in filter(None, os.environ.get("LIT_BACKENDS", "").split(",")):
@@ -169,10 +172,52 @@ def run_omni(rows, results):
     del m
 
 
+def run_qwen(rows, results):
+    import torch
+    from faster_whisper.audio import decode_audio
+    from qwen_asr import Qwen3ASRModel
+
+    dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    m = Qwen3ASRModel.from_pretrained(
+        str(QWEN_DIR), dtype=dtype, device_map="cuda:0",
+        max_inference_batch_size=int(os.environ.get("LIT_QWEN_BATCH", 32)),
+        max_new_tokens=int(os.environ.get("LIT_QWEN_TOKENS", 1024)),
+    )
+    log(f"qwen loaded ({dtype})")
+    step = 32
+    for k in range(0, len(rows), step):
+        group = rows[k : k + step]
+        if time.time() - T0 > TIME_BUDGET_S:
+            for r in group:
+                results[r["audio_filename"]] = ""
+            continue
+        auds, langs, ok = [], [], []
+        for r in group:
+            try:
+                auds.append((decode_audio(str(CLIPS_DIR / r["audio_filename"]), sampling_rate=16000), 16000))
+                langs.append(QWEN_LANG.get((r.get("language") or "").strip()))
+                ok.append(r)
+            except Exception as e:
+                results[r["audio_filename"]] = ""
+                log(f"qwen decode failed: {type(e).__name__}")
+        try:
+            outs = [o.text for o in m.transcribe(audio=auds, language=langs)]
+        except Exception as e:
+            log(f"qwen batch failed: {type(e).__name__}")
+            outs = [""] * len(ok)
+        for r, t in zip(ok, outs):
+            results[r["audio_filename"]] = (t or "").strip()
+        log(f"qwen done {min(k + step, len(rows))}/{len(rows)}")
+    del m
+
+
+RUNNERS = {"whisper": run_whisper, "omni": run_omni, "qwen": run_qwen}
+
+
 def main() -> int:
     rows = list(csv.DictReader(MANIFEST.open(newline="", encoding="utf-8")))
     smoke = os.environ.get("LOST_IN_TRANSCRIPTION_IS_SMOKE", "0") == "1"
-    log(f"manifest rows: {len(rows)}; smoke={smoke}; whisper={HAVE_W} omni={OMNI_DIR.name if HAVE_O else None}")
+    log(f"manifest rows: {len(rows)}; smoke={smoke}; whisper={HAVE_W} qwen={HAVE_Q} omni={OMNI_DIR.name if HAVE_O else None}")
     # longest first keeps batches full and surfaces OOM early
     rows.sort(key=lambda r: -float(r.get("file_duration_seconds") or 0))
     results: dict[str, str] = {}
@@ -181,7 +226,7 @@ def main() -> int:
         by_backend.setdefault(BACKENDS.get((r.get("language") or "").strip(), "omni" if HAVE_O and not HAVE_W else "whisper"), []).append(r)
     for backend, rs in by_backend.items():
         log(f"backend {backend}: {len(rs)} clips")
-        (run_omni if backend == "omni" else run_whisper)(rs, results)
+        RUNNERS[backend](rs, results)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", newline="", encoding="utf-8") as f:
