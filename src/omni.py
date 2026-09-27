@@ -30,6 +30,15 @@ def _split(wav: np.ndarray) -> list[np.ndarray]:
     return out
 
 
+def _placement(device: str) -> dict:
+    """Local-testing hook: LIT_GPU_MEM=9GiB splits a too-big model across GPU+CPU."""
+    import os
+
+    if device == "cuda" and os.environ.get("LIT_GPU_MEM"):
+        return {"device_map": "auto", "max_memory": {0: os.environ["LIT_GPU_MEM"], "cpu": "24GiB"}}
+    return {"device_map": device}
+
+
 class OmniCTC:
     def __init__(self, model_dir: Path, device: str = "cuda"):
         from transformers import AutoProcessor, Wav2Vec2ForCTC
@@ -39,7 +48,7 @@ class OmniCTC:
         self.proc = AutoProcessor.from_pretrained(str(model_dir))
         self.model = (
             Wav2Vec2ForCTC.from_pretrained(
-                str(model_dir), dtype=self.dtype, device_map=device, low_cpu_mem_usage=True
+                str(model_dir), dtype=self.dtype, low_cpu_mem_usage=True, **_placement(device)
             ).eval()
         )
 
