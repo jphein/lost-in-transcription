@@ -1,0 +1,9 @@
+models/
+data/
+submission/
+scratch/
+*.zip
+*.log
+build/
+runtime/
+.stage.*
