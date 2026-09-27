@@ -38,9 +38,9 @@ class OmniCTC:
         self.dtype = torch.float16 if device == "cuda" else torch.float32
         self.proc = AutoProcessor.from_pretrained(str(model_dir))
         self.model = (
-            Wav2Vec2ForCTC.from_pretrained(str(model_dir), dtype=self.dtype)
-            .to(device)
-            .eval()
+            Wav2Vec2ForCTC.from_pretrained(
+                str(model_dir), dtype=self.dtype, device_map=device, low_cpu_mem_usage=True
+            ).eval()
         )
 
     @torch.inference_mode()

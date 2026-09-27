@@ -1,4 +1,4 @@
-"""Lost in Transcription submission: faster-whisper large-v3, per-clip language forcing.
+"""Lost in Transcription submission: faster-whisper large-v3 + Omnilingual ASR CTC, routed per clip.
 
 One zip serves all three tracks; the track is inferred from the manifest's
 `language` column. Logs only aggregate progress (no test data).
@@ -12,6 +12,10 @@ import time
 from pathlib import Path
 
 T0 = time.time()
+# keep transformers from importing TensorFlow/JAX (slow, and competes for GPU memory)
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_JAX", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 TIME_BUDGET_S = float(os.environ.get("LIT_TIME_BUDGET_S", 105 * 60))  # hard limit is 120 min
 
 ROOT = Path.cwd()  # /code_execution
@@ -20,12 +24,30 @@ CLIPS_DIR = DATA_DIR / "clips"
 MANIFEST = DATA_DIR / "test_metadata.csv"
 OUT = ROOT / "submission" / "submission.csv"
 SRC = Path(__file__).resolve().parent
-WHISPER_DIR = SRC / "models" / os.environ.get("LIT_WHISPER", "faster-whisper-large-v3")
-OMNI_DIR = SRC / "models" / os.environ.get("LIT_OMNI", "omni-1b-v2")
+MODELS = SRC / "models"
+WHISPER_DIR = MODELS / os.environ.get("LIT_WHISPER", "faster-whisper-large-v3")
 
-# language code -> backend. Default: whisper everywhere; omni for Nahuatl when shipped.
-BACKENDS = {c: "whisper" for c in ["spa", "enspa", "eng", "ind", "jav", "javind"]}
-BACKENDS.update({c: ("omni" if OMNI_DIR.exists() else "whisper") for c in ["azz", "nhw", "nhi"]})
+
+def _pick_omni() -> Path:
+    if os.environ.get("LIT_OMNI"):
+        return MODELS / os.environ["LIT_OMNI"]
+    for name in ("omni-7b-v2-fp16", "omni-3b-v2-fp16", "omni-1b-v2-fp16"):
+        if (MODELS / name).exists():
+            return MODELS / name
+    return MODELS / "omni-missing"
+
+
+OMNI_DIR = _pick_omni()
+HAVE_W, HAVE_O = WHISPER_DIR.exists(), OMNI_DIR.exists()
+
+# language code -> backend, based on what the zip ships. Whisper wins on
+# Spanish/English (casing, punctuation); Omnilingual CTC wins on Javanese
+# (FLEURS jv proxy: 25.7% vs 70% WER) and is the only model with Nahuatl.
+BACKENDS = {}
+for c in ["spa", "enspa", "eng"]:
+    BACKENDS[c] = "whisper" if HAVE_W else "omni"
+for c in ["ind", "jav", "javind", "azz", "nhw", "nhi"]:
+    BACKENDS[c] = "omni" if HAVE_O else "whisper"
 for kv in filter(None, os.environ.get("LIT_BACKENDS", "").split(",")):
     k, v = kv.split("=")
     BACKENDS[k] = v
@@ -36,7 +58,7 @@ LANG_MAP = {
     "ind": "id", "jav": "jw", "javind": "id",
     "azz": "es", "nhw": "es", "nhi": "es",  # no Nahuatl in whisper; es phonetics closest
 }
-NAHUATL = {"azz", "nhw", "nhi"}
+NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", "1") == "1" else set()
 
 # Short vocabulary priming per track (initial_prompt). Kept tiny: long prompts
 # make whisper hallucinate on short clips.
@@ -136,7 +158,7 @@ def run_omni(rows, results):
                 results[r["audio_filename"]] = ""
                 log(f"omni decode failed: {type(e).__name__}")
         try:
-            texts = m.transcribe_many(wavs)
+            texts = m.transcribe_many(wavs, max_batch_s=float(os.environ.get("LIT_OMNI_BATCH_S", 240)))
         except Exception as e:
             log(f"omni batch failed: {type(e).__name__}")
             texts = [""] * len(ok)
@@ -150,13 +172,13 @@ def run_omni(rows, results):
 def main() -> int:
     rows = list(csv.DictReader(MANIFEST.open(newline="", encoding="utf-8")))
     smoke = os.environ.get("LOST_IN_TRANSCRIPTION_IS_SMOKE", "0") == "1"
-    log(f"manifest rows: {len(rows)}; smoke={smoke}")
+    log(f"manifest rows: {len(rows)}; smoke={smoke}; whisper={HAVE_W} omni={OMNI_DIR.name if HAVE_O else None}")
     # longest first keeps batches full and surfaces OOM early
     rows.sort(key=lambda r: -float(r.get("file_duration_seconds") or 0))
     results: dict[str, str] = {}
     by_backend: dict[str, list] = {}
     for r in rows:
-        by_backend.setdefault(BACKENDS.get((r.get("language") or "").strip(), "whisper"), []).append(r)
+        by_backend.setdefault(BACKENDS.get((r.get("language") or "").strip(), "omni" if HAVE_O and not HAVE_W else "whisper"), []).append(r)
     for backend, rs in by_backend.items():
         log(f"backend {backend}: {len(rs)} clips")
         (run_omni if backend == "omni" else run_whisper)(rs, results)
