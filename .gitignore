@@ -7,3 +7,4 @@ scratch/
 build/
 runtime/
 .stage.*
+.run.*
