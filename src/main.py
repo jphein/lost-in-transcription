@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 T0 = time.time()
@@ -83,6 +84,13 @@ for _code in list(LANG_MAP):
         LANG_MAP[_code] = os.environ[f"LIT_LANG_{_code}"] or None
 
 
+# Every blank transcript is counted here with its cause; nothing is blanked silently.
+FAILS: Counter = Counter()
+# Exit non-zero when more than this fraction of clips failed in the model (not
+# unreadable audio): a failed job is free to retry, a scored blank run is not.
+MAX_FAIL_FRAC = float(os.environ.get("LIT_MAX_FAIL_FRAC", 0.02))
+
+
 def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
 
@@ -124,6 +132,7 @@ def run_whisper(rows, results):
         name, code = r["audio_filename"], (r.get("language") or "").strip()
         if time.time() - T0 > TIME_BUDGET_S:
             results[name] = ""
+            FAILS["time_budget"] += 1
             continue
         try:
             segs, _info = pipe.transcribe(
@@ -141,44 +150,68 @@ def run_whisper(rows, results):
             results[name] = nahuatl_orthography(text) if code in NAHUATL else text
         except Exception as e:  # never let one clip kill the run
             results[name] = ""
+            FAILS[f"whisper_{type(e).__name__}"] += 1
             log(f"whisper clip {i} failed: {type(e).__name__}" + (f" {e}"[:250] if DEBUG else ""))
         if (i + 1) % 50 == 0:
             log(f"whisper done {i + 1}/{len(rows)}")
     del pipe, model
 
 
-def run_omni(rows, results):
-    import torch
-    from faster_whisper.audio import decode_audio
-    from omni import OmniCTC
+def run_omni(rows, results, model=None, load=None):
+    """model/load are injectable for tests (tests/test_oom.py)."""
+    if model is None:
+        import torch
+        from omni import OmniCTC
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    m = OmniCTC(OMNI_DIR, device=device)
-    log(f"omni loaded on {device}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = OmniCTC(OMNI_DIR, device=device)
+        log(f"omni loaded on {device}")
+    if load is None:
+        from faster_whisper.audio import decode_audio
+
+        def load(name):
+            return decode_audio(str(CLIPS_DIR / name), sampling_rate=16000)
+
+    m = model
+    budget = float(os.environ.get("LIT_OMNI_BATCH_S", 240))
     step = 64
     for k in range(0, len(rows), step):
         group = rows[k : k + step]
         if time.time() - T0 > TIME_BUDGET_S:
             for r in group:
                 results[r["audio_filename"]] = ""
+            FAILS["time_budget"] += len(group)
             continue
         wavs, ok = [], []
         for r in group:
             try:
-                wavs.append(decode_audio(str(CLIPS_DIR / r["audio_filename"]), sampling_rate=16000))
+                wavs.append(load(r["audio_filename"]))
                 ok.append(r)
             except Exception as e:
                 results[r["audio_filename"]] = ""
+                FAILS["decode"] += 1
                 log(f"omni decode failed: {type(e).__name__}")
         try:
-            texts = m.transcribe_many(wavs, max_batch_s=float(os.environ.get("LIT_OMNI_BATCH_S", 240)))
+            texts = m.transcribe_many(wavs, max_batch_s=budget)
         except Exception as e:
-            log(f"omni batch failed: {type(e).__name__}")
-            texts = [""] * len(ok)
+            # transcribe_many already backs off on OOM down to one chunk; what
+            # reaches here is a single chunk that won't fit or a non-OOM error.
+            # Retry clip by clip so one bad clip can't blank the other 63.
+            log(f"omni batch failed: {type(e).__name__}; retrying {len(ok)} clips one by one")
+            del e
+            texts = []
+            for w in wavs:
+                try:
+                    texts.append(m.transcribe_many([w], max_batch_s=budget)[0])
+                except Exception as e1:
+                    texts.append(None)
+                    FAILS[f"omni_{type(e1).__name__}"] += 1
+                    log(f"omni clip failed: {type(e1).__name__}")
         for r, t in zip(ok, texts):
             code = (r.get("language") or "").strip()
+            t = t or ""
             results[r["audio_filename"]] = nahuatl_orthography(t) if code in NAHUATL else t
-        log(f"omni done {min(k + step, len(rows))}/{len(rows)}")
+        log(f"omni done {min(k + step, len(rows))}/{len(rows)}; budget={getattr(m, 'budget_s', None)}s oom_retries={getattr(m, 'oom_retries', 0)}")
     del m
 
 
@@ -214,6 +247,7 @@ def run_qwen(rows, results):
             outs = [o.text for o in m.transcribe(audio=auds, language=langs)]
         except Exception as e:
             log(f"qwen batch failed: {type(e).__name__}")
+            FAILS[f"qwen_{type(e).__name__}"] += len(ok)
             outs = [""] * len(ok)
         for r, t in zip(ok, outs):
             results[r["audio_filename"]] = (t or "").strip()
@@ -244,7 +278,18 @@ def main() -> int:
         w.writerow(["audio_filename", "transcript"])
         for r in csv.DictReader(MANIFEST.open(newline="", encoding="utf-8")):
             w.writerow([r["audio_filename"], results.get(r["audio_filename"], "")])
-    log(f"wrote {len(results)} rows; empty={sum(1 for v in results.values() if not v)}")
+    empty = sum(1 for v in results.values() if not v)
+    log(f"wrote {len(results)} rows; empty={empty}; failed={dict(FAILS) or 0}")
+    return exit_status(len(rows))
+
+
+def exit_status(n_rows: int) -> int:
+    """3 if too many clips failed in the model; unreadable audio and time-budget
+    skips are logged above but don't fail the run (a retry wouldn't fix them)."""
+    model_fails = sum(v for k, v in FAILS.items() if k not in ("decode", "time_budget"))
+    if model_fails > MAX_FAIL_FRAC * max(n_rows, 1):
+        log(f"FAILING RUN: {model_fails}/{n_rows} clips failed in the model (limit {MAX_FAIL_FRAC:.0%})")
+        return 3
     return 0
 
 
