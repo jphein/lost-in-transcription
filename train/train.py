@@ -13,6 +13,7 @@ optimiser step and exits 75.
 import argparse
 import json
 import math
+import os
 import random
 import resource
 import signal
@@ -26,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import DEVICE, NAHUATL, REPO, normalize  # noqa: E402
 
 STOP = False
+# fragmentation-proof allocator (mz-C-jv OOMed at 13:31:30 with 1.93 GiB reserved but unallocated)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def _term(signum, frame):
