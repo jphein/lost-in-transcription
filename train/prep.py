@@ -159,9 +159,42 @@ def jember(a) -> int:
     return 0
 
 
+def runtime_dir(a) -> int:
+    """A manifest -> the competition's /code_execution/data layout (clips/ as hard links, test_metadata.csv)
+    plus gt.csv, so a zip can be scored on exactly these clips in the official image."""
+    import os
+
+    from common import decode_audio, read_manifest
+
+    rows = read_manifest(a.manifest)
+    out = Path(a.out)
+    (out / "clips").mkdir(parents=True, exist_ok=True)
+    with open(out / "test_metadata.csv", "w", newline="", encoding="utf-8") as fm, \
+         open(out / "gt.csv", "w", newline="", encoding="utf-8") as fg:
+        wm, wg = csv.writer(fm), csv.writer(fg)
+        wm.writerow(["audio_filename", "file_duration_seconds", "language"])
+        wg.writerow(["audio_filename", "transcript"])
+        for r in rows:
+            src = Path(r["audio"])
+            dst = out / "clips" / src.name
+            if not dst.exists():
+                os.link(src, dst)
+            try:
+                dur = round(len(decode_audio(src)) / 16000)
+            except Exception:
+                dur = 0
+            wm.writerow([src.name, dur, r["lang"]])
+            wg.writerow([src.name, r["ref"]])
+    print(f"{out}: {len(rows)} clips")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    rd = sub.add_parser("runtime-dir")
+    rd.add_argument("--manifest", required=True)
+    rd.add_argument("--out", required=True)
     j = sub.add_parser("jember")
     j.add_argument("--root", required=True)
     j.add_argument("--pad", type=float, default=0.25)
@@ -180,7 +213,8 @@ def main() -> int:
     d.add_argument("--track", choices=["nh", "jv"], required=True)
     d.add_argument("--out", required=True)
     a = ap.parse_args()
-    return {"dev": dev, "csvset": csvset, "tetelancingo": tetelancingo, "jember": jember}[a.cmd](a)
+    return {"dev": dev, "csvset": csvset, "tetelancingo": tetelancingo, "jember": jember,
+            "runtime-dir": runtime_dir}[a.cmd](a)
 
 
 if __name__ == "__main__":
