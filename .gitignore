@@ -9,3 +9,4 @@ runtime/
 .stage.*
 .run.*
 __pycache__/
+src/nah_vocab.tsv
