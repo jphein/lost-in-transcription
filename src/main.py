@@ -125,25 +125,9 @@ def log(msg: str) -> None:
 
 
 def nahuatl_orthography(text: str) -> str:
-    """Map to the reference convention: u for /w/, k for /k/, s for /s/.
+    from nahuatl import to_reference
 
-    Applied only to words that don't look like Spanish (heuristic: contains
-    Nahuatl-typical clusters). Spanish words keep standard orthography.
-    """
-    def fix(word: str) -> str:
-        w = word
-        low = w.lower()
-        if not re.search(r"(tl|tz|hu|uh|kw|cu[aeio]|x|ts|w)", low):
-            return w
-        w = re.sub(r"hu|uh|w", "u", w)
-        w = re.sub(r"Hu|W", "U", w)
-        w = re.sub(r"qu(?=[ei])", "k", w)
-        w = re.sub(r"c(?=[aou])|c$|c(?=[^aeiouh])", "k", w)
-        w = re.sub(r"z|c(?=[ei])", "s", w)
-        w = w.replace("tz", "ts")
-        return w
-
-    return " ".join(fix(t) for t in text.split())
+    return to_reference(text)
 
 
 def run_whisper(rows, results):
