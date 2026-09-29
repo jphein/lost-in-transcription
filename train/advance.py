@@ -46,8 +46,20 @@ def main() -> int:
     cfg = Wav2Vec2Config.from_pretrained(a.model)
     cfg._attn_implementation = "sdpa"
     D = cfg.hidden_size
-    with torch.device(DEVICE):
-        layers = torch.nn.ModuleList([Wav2Vec2EncoderLayerStableLayerNorm(cfg) for _ in range(a.b - a.a)]).eval()
+    with torch.device(DEVICE):  # fp16 storage, each layer upcast to fp32 only while it runs (small cards)
+        layers = torch.nn.ModuleList([Wav2Vec2EncoderLayerStableLayerNorm(cfg) for _ in range(a.b - a.a)]).eval().half()
+
+    def up(mod, args):
+        for p in mod.parameters():
+            p.data = p.data.float()
+
+    def down(mod, args, out):
+        for p in mod.parameters():
+            p.data = p.data.half()
+
+    for layer in layers:
+        layer.register_forward_pre_hook(up)
+        layer.register_forward_hook(down)
     idx = Path(a.model) / "model.safetensors.index.json"
     wm = json.loads(idx.read_text())["weight_map"] if idx.exists() else None
     sd = layers.state_dict()
@@ -56,7 +68,7 @@ def main() -> int:
             i, rest = name.split(".", 1)
             src = f"wav2vec2.encoder.layers.{int(i) + a.a}.{rest}"
             with safe_open(str(Path(a.model) / (wm[src] if wm else "model.safetensors")), framework="pt", device="cpu") as f:
-                t.copy_(f.get_tensor(src).float())
+                t.copy_(f.get_tensor(src))
 
     inp, out = Path(a.inp), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -90,8 +102,9 @@ def main() -> int:
             n_done += 1
             if n_done % 500 == 0:
                 print(f"{n_done} pieces in {time.time() - t0:.0f}s", flush=True)
+    gpu = torch.cuda.max_memory_allocated() / 2**30 if DEVICE == "cuda" else 0
     print(f"ADVANCE_DONE {out} pieces={n_done} frames={off} peak_rss_gib="
-          f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20:.2f} stopped={STOP}", flush=True)
+          f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20:.2f} gpu_peak_gib={gpu:.2f} stopped={STOP}", flush=True)
     return 0 if not STOP else 75
 
 

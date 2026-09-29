@@ -132,14 +132,11 @@ def load_fp16_upcast(model_dir, device=None, attn="sdpa", keep_layers=None):
 
     device = device or DEVICE
     kw = {"device_map": device} if device != "cpu" else {}  # device_map streams shards straight to the GPU
+    if keep_layers is not None:  # build only the frozen bottom, so the rest never reaches the card
+        kw["num_hidden_layers"] = keep_layers
     m = Wav2Vec2ForCTC.from_pretrained(str(model_dir), dtype=torch.float16, attn_implementation=attn, **kw).eval()
     w = m.wav2vec2
-    if keep_layers is not None:  # the cache only needs the frozen bottom: free the rest of the card
-        import torch.nn as nn
-
-        w.encoder.layers = nn.ModuleList(list(w.encoder.layers)[:keep_layers])
-        if device == "cuda":
-            torch.cuda.empty_cache()
+    assert keep_layers is None or len(w.encoder.layers) == keep_layers
     for mod in (w.feature_extractor, w.feature_projection, w.encoder.pos_conv_embed, w.encoder.layer_norm, m.lm_head):
         mod.float()
 
