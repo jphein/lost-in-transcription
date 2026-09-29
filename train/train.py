@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import NAHUATL, REPO, normalize  # noqa: E402
+from common import DEVICE, NAHUATL, REPO, normalize  # noqa: E402
 
 STOP = False
 
@@ -59,7 +59,10 @@ class Cache:
             self.rows = keep
 
     def feats(self, r):
-        a = np.fromfile(self.f, dtype=np.float16, count=r["n"] * self.D, offset=r["off"] * self.D * 2)
+        # np.fromfile's offset is relative to the file position, so seek to the absolute offset first
+        self.f.seek(r["off"] * self.D * 2)
+        a = np.fromfile(self.f, dtype=np.float16, count=r["n"] * self.D)
+        assert a.size == r["n"] * self.D, (self.path, r["key"], a.size)
         return a.reshape(r["n"], self.D)
 
 
@@ -268,13 +271,13 @@ def main() -> int:
     def log(**kw):
         kw["t"] = time.strftime("%Y-%m-%d %H:%M:%S")
         kw["rss_gib"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2)
-        if torch.cuda.is_available():
+        if device == "cuda":
             kw["gpu_peak_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
         print(json.dumps(kw, ensure_ascii=False), flush=True)
         logf.write(json.dumps(kw, ensure_ascii=False) + "\n")
         logf.flush()
 
-    device = "cuda"
+    device = DEVICE
     D = json.loads((Path(a.model) / "config.json").read_text())["hidden_size"]
     vocab = Vocab(a.model)
     proc = AutoProcessor.from_pretrained(a.model)

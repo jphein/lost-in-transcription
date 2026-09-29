@@ -9,6 +9,7 @@ import gc
 import io
 import itertools
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO / "src"))  # omni._split, nahuatl.to_reference
 sys.path.insert(0, str(REPO / "runtime"))  # the official score.py
 
 SR = 16000
+DEVICE = os.environ.get("LIT_DEVICE", "cuda")  # "cpu" only for logic tests on a small model
 HOP = 320  # product of the conv strides: 50 frames per second
 NAHUATL = {"azz", "nhw", "nhi"}
 
@@ -122,16 +124,15 @@ def n_frames(n_samples: int) -> int:
 
 
 # --- model -----------------------------------------------------------------------------------------
-def load_fp16_upcast(model_dir, device="cuda", attn="sdpa"):
+def load_fp16_upcast(model_dir, device=None, attn="sdpa"):
     """Full model with fp16 storage and fp32 compute: the small modules become fp32 for good, and each
     transformer layer is cast to fp32 just before it runs and back to fp16 afterwards (≤ 0.2 GB extra)."""
     import torch
     from transformers import Wav2Vec2ForCTC
 
-    m = Wav2Vec2ForCTC.from_pretrained(
-        str(model_dir), dtype=torch.float16, low_cpu_mem_usage=True, device_map=device,
-        attn_implementation=attn,
-    ).eval()
+    device = device or DEVICE
+    kw = {"device_map": device} if device != "cpu" else {}  # device_map streams shards straight to the GPU
+    m = Wav2Vec2ForCTC.from_pretrained(str(model_dir), dtype=torch.float16, attn_implementation=attn, **kw).eval()
     w = m.wav2vec2
     for mod in (w.feature_extractor, w.feature_projection, w.encoder.pos_conv_embed, w.encoder.layer_norm, m.lm_head):
         mod.float()
@@ -155,7 +156,7 @@ def bottom_features(m, proc, wav: np.ndarray, upto: int):
     in eval mode with no attention mask (what omni.OmniCTC does for a batch of one)."""
     import torch
 
-    x = proc(wav, sampling_rate=SR, return_tensors="pt").input_values.to("cuda", torch.float32)
+    x = proc(wav, sampling_rate=SR, return_tensors="pt").input_values.to(DEVICE, torch.float32)
     w = m.wav2vec2
     f = w.feature_extractor(x).transpose(1, 2)
     h, _ = w.feature_projection(f)

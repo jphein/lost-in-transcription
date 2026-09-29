@@ -58,16 +58,37 @@ def dev(a) -> int:
     return 0
 
 
+def csvset(a) -> int:
+    """A proxy set in the runtime layout: clips/, test_metadata.csv and a ground-truth CSV."""
+    lang = {}
+    with open(Path(a.dir) / "test_metadata.csv", newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            lang[r["audio_filename"]] = (r.get("language") or "").strip()
+    rows = []
+    with open(a.gt, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            ref = (r.get("transcript") or "").strip()
+            rows.append({"key": Path(r["audio_filename"]).stem, "audio": str((Path(a.dir) / "clips" / r["audio_filename"]).resolve()),
+                         "ref": ref, "text": normalize(ref), "lang": lang.get(r["audio_filename"], ""), "convo": ""})
+    write_manifest(a.out, rows)
+    print(f"{a.out}: {len(rows)} rows, langs {dict(Counter(r['lang'] for r in rows))}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("csvset")
+    c.add_argument("--dir", required=True)
+    c.add_argument("--gt", required=True)
+    c.add_argument("--out", required=True)
     d = sub.add_parser("dev")
     d.add_argument("--tsv", required=True)
     d.add_argument("--clips", required=True)
     d.add_argument("--track", choices=["nh", "jv"], required=True)
     d.add_argument("--out", required=True)
     a = ap.parse_args()
-    return {"dev": dev}[a.cmd](a)
+    return {"dev": dev, "csvset": csvset}[a.cmd](a)
 
 
 if __name__ == "__main__":
