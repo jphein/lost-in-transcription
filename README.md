@@ -28,3 +28,8 @@ scripts/run_local.sh data/<dataset> dist/in-jv/submission.zip scratch/out.csv \
 
 [MPL-2.0](LICENSE). The competition requires this license for winning solutions. External models: Whisper (MIT) and
 Omnilingual ASR (Apache-2.0).
+
+Data: `src/es_words.txt` is a list of Spanish word types extracted from the FLEURS es_419 transcripts
+(Conneau et al., 2022, Google), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The only
+change is extracting and deduplicating the word types. `src/nah_vocab.tsv`, which `segment.py` reads, is built
+locally from the competition's dev set by `scripts/build_nah_vocab.py`. It is not distributed in this repository.
