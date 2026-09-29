@@ -103,8 +103,9 @@ def build_top(model_dir, upto, device):
             h = self.layer_norm(h)
             return self.lm_head(self.dropout(h))
 
-    top = Top()
-    # load exactly the tensors we train from the (sharded) fp16 checkpoint, as fp32
+    with torch.device(device):  # build on the card directly: no CPU copy of the 1.7 GB fp32 top
+        top = Top()
+    # load exactly the tensors we train from the (sharded) fp16 checkpoint, as fp32, one at a time
     idx = Path(model_dir) / "model.safetensors.index.json"
     files = json.loads(idx.read_text())["weight_map"] if idx.exists() else None
     want = {}
@@ -121,14 +122,20 @@ def build_top(model_dir, upto, device):
     for dst, src in want.items():
         fn = files[src] if files else "model.safetensors"
         by_file.setdefault(fn, []).append((dst, src))
-    sd = {}
-    for fn, pairs in by_file.items():
-        with safe_open(str(Path(model_dir) / fn), framework="pt", device="cpu") as f:
-            for dst, src in pairs:
-                sd[dst] = f.get_tensor(src).float()
-    top.load_state_dict(sd, strict=True)
-    del sd
-    return top.to(device), cfg
+    dst_sd = top.state_dict()  # tensors share storage with the parameters
+    loaded = set()
+    with torch.no_grad():
+        for fn, pairs in by_file.items():
+            with safe_open(str(Path(model_dir) / fn), framework="pt", device="cpu") as f:
+                for dst, src in pairs:
+                    t = f.get_tensor(src)
+                    assert t.shape == dst_sd[dst].shape, (dst, t.shape, dst_sd[dst].shape)
+                    dst_sd[dst].copy_(t.float())
+                    loaded.add(dst)
+                    del t
+    missing = set(dst_sd) - loaded
+    assert not missing, f"top tensors not in the checkpoint: {sorted(missing)[:5]}"
+    return top, cfg
 
 
 def time_mask(h, p=0.05, span=10, rng=None):
