@@ -5,6 +5,7 @@ One zip serves all three tracks; the track is inferred from the manifest's
 """
 
 import csv
+import json
 import os
 import re
 import sys
@@ -32,13 +33,24 @@ WHISPER_DIR = MODELS / os.environ.get("LIT_WHISPER", "faster-whisper-large-v3")
 def _pick_omni() -> Path:
     if os.environ.get("LIT_OMNI"):
         return MODELS / os.environ["LIT_OMNI"]
-    for name in ("omni-7b-v2-fp16", "omni-3b-v2-fp16", "omni-1b-v2-fp16"):
+    # omni-3b-ft: a fine-tuned copy of omni-3b-v2-fp16 written by train/export.py
+    for name in ("omni-3b-ft", "omni-7b-v2-fp16", "omni-3b-v2-fp16", "omni-1b-v2-fp16"):
         if (MODELS / name).exists():
             return MODELS / name
     return MODELS / "omni-missing"
 
 
+def _omni_cfg(d: Path) -> dict:
+    """Optional lit.json beside a fine-tuned model (train/export.py); unreadable means defaults."""
+    try:
+        cfg = json.loads((d / "lit.json").read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 OMNI_DIR = _pick_omni()
+OMNI_CFG = _omni_cfg(OMNI_DIR)
 QWEN_DIR = MODELS / os.environ.get("LIT_QWEN", "qwen3-asr-1.7b")
 HAVE_W, HAVE_O, HAVE_Q = WHISPER_DIR.exists(), OMNI_DIR.exists(), QWEN_DIR.exists()
 # Qwen3-ASR language names (no Javanese / Nahuatl support)
@@ -62,7 +74,9 @@ LANG_MAP = {
     "ind": "id", "jav": "jw", "javind": "id",
     "azz": "es", "nhw": "es", "nhi": "es",  # no Nahuatl in whisper; es phonetics closest
 }
-NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", "1") == "1" else set()
+# a model fine-tuned on reference-orthography targets may not want the map ({"nah_ortho": false})
+_NAH_DEFAULT = "1" if OMNI_CFG.get("nah_ortho", True) is not False else "0"
+NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", _NAH_DEFAULT) == "1" else set()
 
 # Short vocabulary priming per track (initial_prompt). Kept tiny: long prompts
 # make whisper hallucinate on short clips.
