@@ -107,3 +107,33 @@ class PickOmni(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SegWithoutMap(unittest.TestCase):
+    """lit.json can switch the orthography map off; the word-boundary repair must not go with it."""
+
+    def tearDown(self):
+        importlib.reload(main)
+
+    def test_seg_runs_when_map_is_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "lit.json").write_text(json.dumps({"nah_ortho": False}))
+            m = reload_with(Path(d))
+            self.assertEqual(m.NAHUATL, set())
+            self.assertTrue(m.NAH_SEG)
+            with mock.patch("segment.fix_boundaries", side_effect=lambda t: t + "|seg") as fb:
+                self.assertEqual(m.reference_style("abc", "nhi"), "abc|seg")
+                fb.assert_called_once()
+
+    def test_lit_json_can_switch_seg_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "lit.json").write_text(json.dumps({"nah_ortho": False, "nah_seg": False}))
+            m = reload_with(Path(d))
+            self.assertFalse(m.NAH_SEG)
+            self.assertEqual(m.reference_style("abc", "nhi"), "abc")
+
+    def test_non_nahuatl_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "lit.json").write_text(json.dumps({"nah_ortho": False, "id_post": False}))
+            m = reload_with(Path(d))
+            self.assertEqual(m.reference_style("abc 12", "jav"), "abc 12")

@@ -77,6 +77,14 @@ LANG_MAP = {
 # a model fine-tuned on reference-orthography targets may not want the map ({"nah_ortho": false})
 _NAH_DEFAULT = "1" if OMNI_CFG.get("nah_ortho", True) is not False else "0"
 NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", _NAH_DEFAULT) == "1" else set()
+# Word-boundary repair after the orthography mapping (segment.py + nah_vocab.tsv); LIT_NAH_SEG=0 turns it off
+# (a fine-tuned model can also switch it off with lit.json {"nah_seg": false}).
+_SEG_DEFAULT = "1" if OMNI_CFG.get("nah_seg", True) is not False else "0"
+NAH_SEG = os.environ.get("LIT_NAH_SEG", _SEG_DEFAULT) == "1"
+# Indonesian/Javanese reference conventions (indonesian.py: digits spelled out, acronyms, proper nouns);
+# LIT_ID_POST=0 turns it off (lit.json {"id_post": false} too).
+_ID_DEFAULT = "1" if OMNI_CFG.get("id_post", True) is not False else "0"
+INDONESIAN = {"ind", "jav", "javind"} if os.environ.get("LIT_ID_POST", _ID_DEFAULT) == "1" else set()
 
 # Short vocabulary priming per track (initial_prompt). Kept tiny: long prompts
 # make whisper hallucinate on short clips.
@@ -138,10 +146,33 @@ def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
 
 
+NAH_CODES = {"azz", "nhw", "nhi"}
+
+
+def reference_style(text: str, code: str) -> str:
+    """Write a transcript the way the references for its language are written."""
+    if code in NAHUATL:
+        return nahuatl_orthography(text)
+    if code in NAH_CODES and NAH_SEG:  # the map is off (a fine-tuned model): the word-boundary repair still runs
+        from segment import fix_boundaries
+
+        return fix_boundaries(text)
+    if code in INDONESIAN:
+        from indonesian import to_reference
+
+        return to_reference(text)
+    return text
+
+
 def nahuatl_orthography(text: str) -> str:
     from nahuatl import to_reference
 
-    return to_reference(text)
+    text = to_reference(text)
+    if NAH_SEG:
+        from segment import fix_boundaries
+
+        text = fix_boundaries(text)
+    return text
 
 
 def run_whisper(rows, results):
@@ -174,7 +205,7 @@ def run_whisper(rows, results):
                 vad_filter=True,
             )
             text = " ".join(s.text.strip() for s in segs).strip()
-            results[name] = nahuatl_orthography(text) if code in NAHUATL else text
+            results[name] = reference_style(text, code)
         except Exception as e:  # never let one clip kill the run
             results[name] = ""
             # unreadable audio (PyAV) is "decode", as in run_omni: not a model failure
@@ -209,7 +240,7 @@ def run_whisper(rows, results):
             RESCUE[f"retry_{type(e).__name__}"] += 1
             continue
         if text:
-            results[name] = nahuatl_orthography(text) if code in NAHUATL else text
+            results[name] = reference_style(text, code)
             RESCUE["whisper_novad"] += 1
     if todo:
         log(f"whisper retry: {len(todo)} empty clip(s), {RESCUE['whisper_novad']} recovered")
@@ -270,7 +301,7 @@ def run_omni(rows, results, model=None, load=None):
         for r, t in zip(ok, texts):
             code = (r.get("language") or "").strip()
             t = t or ""
-            results[r["audio_filename"]] = nahuatl_orthography(t) if code in NAHUATL else t
+            results[r["audio_filename"]] = reference_style(t, code)
         log(f"omni done {min(k + step, len(rows))}/{len(rows)}; budget={getattr(m, 'budget_s', None)}s oom_retries={getattr(m, 'oom_retries', 0)}")
     del m
 
