@@ -301,12 +301,15 @@ def main() -> int:
         return 0
 
     caches, items = [], []
-    for spec in a.train:
-        path, _, rep = spec.partition(":")
+    for spec in a.train:  # PATH[:REPEAT[:KEYS.jsonl]]: KEYS restricts the cache to that manifest's clips
+        path, rep, keys = (spec.split(":") + ["", ""])[:3]
         c = Cache(path, D, vocab=vocab)
+        if keys:
+            want = {json.loads(l)["key"] for l in Path(keys).read_text(encoding="utf-8").splitlines() if l.strip()}
+            c.rows = [r for r in c.rows if r["clip"] in want]
         caches.append(c)
         items += [(c, r) for r in c.rows] * int(rep or 1)
-        log(event="train_cache", path=path, repeat=int(rep or 1), pieces=len(c.rows), skipped=c.skipped,
+        log(event="train_cache", path=path, keys=keys, repeat=int(rep or 1), pieces=len(c.rows), skipped=c.skipped,
             dropped_chars=c.dropped, audio_s=round(sum(r["n"] for r in c.rows) / 50))
 
     head = [p for n, p in top.named_parameters() if n.startswith(("lm_head", "layer_norm"))]

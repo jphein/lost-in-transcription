@@ -34,13 +34,15 @@ def dev(a) -> int:
     by_convo = defaultdict(list)
     for r in rows:
         by_convo[r["convo"]].append(r)
-    if a.track == "nh":
+    if a.track == "nh":  # FINETUNE.md §9 09:36: all of nhi (1 convo), 1 of nhw's 3, 4 of azz's 17
+        k = {"nhi": 1, "nhw": 1, "azz": 4}
         by_var = defaultdict(set)
         for r in rows:
             by_var[r["lang"]].add(r["convo"])
         V = set()
         for var in sorted(by_var):
-            V |= set(random.Random(0).sample(sorted(by_var[var]), 2))
+            cs = sorted(by_var[var], key=lambda c: (len(c), c))  # numeric-looking ids in numeric order
+            V |= set(random.Random(0).sample(cs, min(k.get(var, 1), len(cs))))
     else:
         V = {min(by_convo, key=lambda c: (len(by_convo[c]), c))}
     T = [r for r in rows if r["convo"] not in V]
