@@ -28,6 +28,11 @@ class References(unittest.TestCase):
     def test_acronyms_and_proper_nouns(self):
         self.assertEqual(ind.to_reference("aku sma di jogja pakai hp"), "aku SMA di Jogja pakai HP")
 
+    def test_months_and_homographs(self):
+        self.assertEqual(ind.to_reference("bulan mei"), "bulan Mei")
+        # also common words (Javanese "return", "chili"; "unlucky"), so they stay as the model wrote them
+        self.assertEqual(ind.to_reference("mau bali lombok malang"), "mau bali lombok malang")
+
     def test_punctuation_survives_and_unknown_words_stay(self):
         self.assertEqual(ind.to_reference("sma, terus kuliah."), "SMA, terus kuliah.")
         self.assertEqual(ind.to_reference(""), "")

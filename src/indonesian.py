@@ -2,13 +2,17 @@
 
 The acoustic model writes everything lowercase and sometimes writes numbers as digits. The references
 capitalize acronyms and proper nouns and spell numbers out in Indonesian. Three fixed rules, in this order:
-  1. digits -> Indonesian number words ("2018" -> "dua ribu delapan belas"), matching num2words(lang="id");
-  2. common acronyms -> UPPER ("sma" -> "SMA"); the scorer keeps a capital that is followed by a capital,
+  1. digits -> Indonesian number words ("2018" -> "dua ribu delapan belas"). This matches num2words(lang="id")
+     except for a thousands group of 1 under juta/miliar/triliun, where it writes the idiomatic "seribu"
+     ("satu juta seribu") and num2words writes "satu ribu";
+  2. common acronyms -> UPPER ("sma" -> "SMA"). The scorer keeps a capital that is followed by a capital,
      so this is safe even at a sentence start;
-  3. common proper nouns (places, countries, religions, holidays, days, months) -> Titlecase.
-The lists are general knowledge of Indonesian, not learned from any reference transcripts.
-Measured on the in-jv dev set (372 clips, official scorer): -1.53 WER points [-1.94, -1.01], bootstrapped by
-speaker (scratch/audit-dev/indonesian/levers-speaker.txt).
+  3. common proper nouns (places, countries, religions, holidays, days, months) -> Titlecase. A proper noun
+     at a sentence start in the reference can still cost a word, because the scorer lowercases it there.
+The lists are general-knowledge entries, finalized after an agent had viewed the dev set's most common
+capitalized words. Every such word they include is a standard acronym or name. Words that are also common
+Javanese or Indonesian words (minggu "week", bali "return", lombok "chili", malang "unlucky") are left out.
+The dev-set measurement and its uncertainty are in PR #3.
 """
 import re
 
@@ -17,12 +21,12 @@ ACRONYMS = {"tk", "sd", "smp", "sma", "smk", "mts", "sltp", "slta", "hp", "pr", 
             "pdam", "rt", "rw", "rs", "ukm", "umkm", "osis", "pkl", "kkn", "ipk", "ipa", "ips", "uas", "uts", "ppkn",
             "bk", "ptn", "pts", "snmptn", "sbmptn", "utbk", "cpns", "sdm", "bumn"}
 PROPER = {"indonesia", "jawa", "jakarta", "jogja", "yogya", "yogyakarta", "solo", "surakarta", "semarang", "surabaya",
-          "bandung", "bali", "malang", "madiun", "kediri", "klaten", "sragen", "boyolali", "wonogiri", "karanganyar",
-          "sukoharjo", "madura", "sumatra", "sumatera", "kalimantan", "sulawesi", "papua", "lombok", "jepang", "korea",
+          "bandung", "madiun", "kediri", "klaten", "sragen", "boyolali", "wonogiri", "karanganyar",
+          "sukoharjo", "madura", "sumatra", "sumatera", "kalimantan", "sulawesi", "papua", "jepang", "korea",
           "cina", "china", "amerika", "malaysia", "singapura", "arab", "belanda", "inggris", "eropa", "asia", "afrika",
           "australia", "india", "thailand", "jerman", "perancis", "prancis", "islam", "allah", "kristen", "katolik",
           "hindu", "buddha", "lebaran", "ramadan", "ramadhan", "natal", "senin", "selasa", "rabu", "kamis", "jumat",
-          "sabtu", "januari", "februari", "maret", "april", "juni", "juli", "agustus", "september", "oktober",
+          "sabtu", "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september", "oktober",
           "november", "desember"}
 _TOK = re.compile(r"^(\W*)(.*?)(\W*)$", re.S)
 _ONES = ["nol", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan"]

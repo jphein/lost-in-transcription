@@ -4,10 +4,10 @@ The acoustic model fuses short words onto a neighbour ("kikuij ya" -> "kikuijya"
 and now and then splits one ("telchikauak" -> "tel chikauak"). Each costs about two word errors. Two rules,
 both driven by counts from the references (nah_vocab.tsv):
   join:  two adjacent words become one when the references write them joined (at least MINC times)
-         more often than apart. This is the shipped rule: -0.40 WER points [-0.80, -0.10] on the sp-nh
-         dev set, cross-validated by conversation (scratch/audit-dev/nahuatl/levers-b1.txt).
+         more often than apart. This is the shipped rule; it helped on the sp-nh dev set, cross-validated
+         by conversation (PR #3).
   split: a word the references never use becomes two words they use at least MINC times each.
-         OFF by default: it made the dev set WORSE (+1.04 [+0.15, +1.88]), because an unseen Nahuatl
+         OFF by default and unreachable from main.py: it made the dev set worse, because an unseen Nahuatl
          word is usually a real word that happens to decompose, not a fusion.
 Nothing changes when the vocabulary is missing.
 
