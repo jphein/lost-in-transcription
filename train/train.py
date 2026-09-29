@@ -259,6 +259,8 @@ def main() -> int:
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--max-steps", type=int, default=0, help="stop after N optimiser steps (smoke tests)")
+    ap.add_argument("--amp", choices=["none", "bf16"], default="none",
+                    help="bf16 autocast for the trainable forward (B60/XPU); master weights and Adam stay fp32")
     a = ap.parse_args()
     signal.signal(signal.SIGTERM, _term)
 
@@ -280,6 +282,8 @@ def main() -> int:
         kw["rss_gib"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2)
         if device == "cuda":
             kw["gpu_peak_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
+        elif device == "xpu":
+            kw["gpu_peak_gib"] = round(torch.xpu.max_memory_allocated() / 2**30, 2)
         print(json.dumps(kw, ensure_ascii=False), flush=True)
         logf.write(json.dumps(kw, ensure_ascii=False) + "\n")
         logf.flush()
@@ -338,7 +342,7 @@ def main() -> int:
         return max(0.0, (total - s) / max(1, total - warm))
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_at)
-    log(event="setup", micro_batches=len(batches0), steps_per_epoch=steps_per_epoch, total_steps=total, warmup=warm,
+    log(event="setup", amp=a.amp, upto=a.upto, micro_batches=len(batches0), steps_per_epoch=steps_per_epoch, total_steps=total, warmup=warm,
         trainable_m=round(sum(p.numel() for p in top.parameters()) / 1e6, 1), epochs=a.epochs)
 
     start_epoch, skip_micro, step, best = 1, 0, 0, float("inf")
@@ -368,8 +372,12 @@ def main() -> int:
             if k < skip_micro:
                 continue
             x, mask, tg, tl = collate(b, device, True, rng)
-            logits = top(x, mask)
-            lp = F.log_softmax(logits, dim=-1, dtype=torch.float32).transpose(0, 1)
+            if a.amp == "bf16":
+                with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                    logits = top(x, mask)
+            else:
+                logits = top(x, mask)
+            lp = F.log_softmax(logits.float(), dim=-1, dtype=torch.float32).transpose(0, 1)
             il = mask.sum(-1)
             loss = F.ctc_loss(lp, tg.to(device), il, tl.to(device), blank=cfg.pad_token_id, reduction="mean",
                               zero_infinity=True)
