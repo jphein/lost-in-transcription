@@ -72,6 +72,9 @@ def main() -> int:
             src = f"wav2vec2.encoder.layers.{int(i) + a.a}.{rest}"
             with safe_open(str(Path(a.model) / (wm[src] if wm else "model.safetensors")), framework="pt", device="cpu") as f:
                 t.copy_(f.get_tensor(src))
+    # sd holds the original fp16 storages; the upcast hooks swap p.data, so keeping sd alive would double
+    # the card's footprint after the first pass (measured 4.8 vs 2.3 GiB)
+    del sd, t
 
     inp, out = Path(a.inp), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
