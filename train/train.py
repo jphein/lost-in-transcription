@@ -219,7 +219,9 @@ def evaluate(top, cache, proc, device, max_frames=12000):
     for (clip, part), t in sorted(pieces.items()):
         clips.setdefault(clip, []).append(t)
     meta = {r["clip"]: r for r in cache.rows}
-    refs, raw, mapped, langs = [], [], [], []
+    import main as sub
+
+    refs, raw, mapped, seg, post, langs = [], [], [], [], [], []
     for clip, parts in clips.items():
         r = meta[clip]
         t = " ".join(p.strip() for p in parts if p.strip())
@@ -229,8 +231,18 @@ def evaluate(top, cache, proc, device, max_frames=12000):
         raw.append(normalize(clean_transcript(t, code)))
         m = to_reference(t) if code in NAHUATL else t
         mapped.append(normalize(clean_transcript(m, code)))
+        # luna-refurb's post-processing (main.reference_style): post = map + join fix / Indonesian rules;
+        # seg = join fix without the map (what a fine-tuned model with lit.json nah_ortho=false ships)
+        post.append(normalize(clean_transcript(sub.reference_style(t, code), code)))
+        if code in NAHUATL:
+            from segment import fix_boundaries
+
+            seg.append(normalize(clean_transcript(fix_boundaries(t), code)))
+        else:
+            seg.append(post[-1])
     top.train()
-    out = {"wer_raw": jiwer.wer(refs, raw), "wer_map": jiwer.wer(refs, mapped), "n_clips": len(refs)}
+    out = {"wer_raw": jiwer.wer(refs, raw), "wer_map": jiwer.wer(refs, mapped), "wer_seg": jiwer.wer(refs, seg),
+           "wer_post": jiwer.wer(refs, post), "n_clips": len(refs)}
     by = {}
     for code, ref_, raw_, m_ in zip(langs, refs, raw, mapped):
         g = by.setdefault(code or "?", ([], [], []))
@@ -258,6 +270,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--init", default="", help="load the top's weights from this .pt (best.pt) before anything else")
+    ap.add_argument("--seg-vocab", default="", help="segment.load() this vocab first (e.g. a V-excluded nah_vocab)")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--max-steps", type=int, default=0, help="stop after N optimiser steps (smoke tests)")
     ap.add_argument("--amp", choices=["none", "bf16"], default="none",
@@ -290,6 +303,11 @@ def main() -> int:
         logf.flush()
 
     device = DEVICE
+    if a.seg_vocab:
+        import segment
+
+        n = segment.load(a.seg_vocab)
+        log(event="seg_vocab", path=a.seg_vocab, loaded=n)
     D = json.loads((Path(a.model) / "config.json").read_text())["hidden_size"]
     vocab = Vocab(a.model)
     proc = AutoProcessor.from_pretrained(a.model)
@@ -307,6 +325,7 @@ def main() -> int:
             r2, _ = evaluate(top, val2, proc, device)
             extra = {"val2_wer_raw": round(r2["wer_raw"], 4), "val2_wer_map": round(r2["wer_map"], 4)}
         log(event="eval", epoch=epoch, tag=tag, wer_raw=round(res["wer_raw"], 4), wer_map=round(res["wer_map"], 4),
+            wer_seg=round(res["wer_seg"], 4), wer_post=round(res["wer_post"], 4),
             by_lang=res["by_lang"], n_clips=res["n_clips"], **extra)
         (out / f"val_pred_ep{epoch:02d}.json").write_text(json.dumps(preds, ensure_ascii=False, indent=0), encoding="utf-8")
         return min(res["wer_raw"], res["wer_map"])
