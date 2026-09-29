@@ -32,6 +32,8 @@ def main() -> int:
     src, dst = Path(a.model), Path(a.out)
     dst.mkdir(parents=True, exist_ok=False)
     top = torch.load(a.top, map_location="cpu", weights_only=True)
+    if isinstance(top, dict) and "top" in top and "opt" in top:  # a last.pt (F ships its final epoch)
+        top = top["top"]
     ren = {}
     for k, v in top.items():
         if k.startswith("layers."):
