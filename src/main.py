@@ -90,6 +90,35 @@ FAILS: Counter = Counter()
 # unreadable audio): a failed job is free to retry, a scored blank run is not.
 MAX_FAIL_FRAC = float(os.environ.get("LIT_MAX_FAIL_FRAC", 0.02))
 
+# The platform's validator rejects a submission with any empty transcript cell
+# (sp-en, 2026-09-29: 592 rows, one empty -> "not a valid submission", no score).
+# So an empty whisper result is retried once without VAD, and anything still
+# empty is written as one short, common word for its language: at most one
+# insertion, and always a valid file. Counted in RESCUE and logged, never silent.
+RESCUE: Counter = Counter()
+RETRY_MAX_NO_SPEECH = float(os.environ.get("LIT_RETRY_NSP", 0.7))
+FALLBACK_WORD = {
+    "enspa": "yeah", "eng": "yeah", "spa": "sí",
+    "ind": "iya", "jav": "iya", "javind": "iya",
+    "azz": "kemaj", "nhw": "kemaj", "nhi": "kemaj",
+}
+# pandas.read_csv turns these exact cell values into NaN, which a validator
+# treats as empty; a trailing period keeps them text (the scorer drops periods).
+_PANDAS_NA = {"#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND",
+              "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null"}
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_transcript(text, code: str) -> str:
+    """One line of UTF-8 text: never empty, never a value pandas reads as NaN."""
+    t = " ".join(_CTRL.sub(" ", text or "").split())
+    if not t:
+        RESCUE["placeholder"] += 1
+        t = FALLBACK_WORD.get(code, "yeah")
+    if t in _PANDAS_NA:
+        t += "."
+    return t
+
 
 def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
@@ -150,10 +179,42 @@ def run_whisper(rows, results):
             results[name] = nahuatl_orthography(text) if code in NAHUATL else text
         except Exception as e:  # never let one clip kill the run
             results[name] = ""
-            FAILS[f"whisper_{type(e).__name__}"] += 1
+            # unreadable audio (PyAV) is "decode", as in run_omni: not a model failure
+            cause = "decode" if type(e).__module__.split(".")[0] == "av" else f"whisper_{type(e).__name__}"
+            FAILS[cause] += 1
             log(f"whisper clip {i} failed: {type(e).__name__}" + (f" {e}"[:250] if DEBUG else ""))
         if (i + 1) % 50 == 0:
             log(f"whisper done {i + 1}/{len(rows)}")
+    # Clips that came back empty (VAD heard no speech, or the clip errored) get one
+    # unbatched retry without VAD, keeping only segments whisper itself rates as
+    # speech. Measured in the official image (large-v3): 4 s of digital silence
+    # comes back as "Teksting av Nicolai Winther" (a known hallucination) with
+    # no_speech_prob 0.86; the same speech clip scores 0.17 at full volume and
+    # 0.48 at -30 dB. Below the cut the retry keeps it; otherwise the fallback word wins.
+    todo = [r for r in rows if not results.get(r["audio_filename"], "").strip()]
+    for r in todo:
+        if time.time() - T0 > TIME_BUDGET_S:
+            break
+        name, code = r["audio_filename"], (r.get("language") or "").strip()
+        try:
+            segs, _info = model.transcribe(
+                str(CLIPS_DIR / name),
+                language=LANG_MAP.get(code, None),
+                task="transcribe",
+                beam_size=beam,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+                vad_filter=False,
+            )
+            text = " ".join(s.text.strip() for s in segs if s.no_speech_prob < RETRY_MAX_NO_SPEECH).strip()
+        except Exception as e:
+            RESCUE[f"retry_{type(e).__name__}"] += 1
+            continue
+        if text:
+            results[name] = nahuatl_orthography(text) if code in NAHUATL else text
+            RESCUE["whisper_novad"] += 1
+    if todo:
+        log(f"whisper retry: {len(todo)} empty clip(s), {RESCUE['whisper_novad']} recovered")
     del pipe, model
 
 
@@ -272,15 +333,27 @@ def main() -> int:
         log(f"backend {backend}: {len(rs)} clips")
         RUNNERS[backend](rs, results)
 
+    raw_empty = sum(1 for r in rows if not (results.get(r["audio_filename"]) or "").strip())
+    written, empty = write_submission(results)
+    log(f"wrote {written} rows; empty={empty}; raw_empty={raw_empty}; rescue={dict(RESCUE) or 0}; failed={dict(FAILS) or 0}")
+    return exit_status(len(rows))
+
+
+def write_submission(results) -> tuple[int, int]:
+    """One row per manifest row, in manifest order, every transcript cleaned."""
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    written = empty = 0
     with OUT.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
         w.writerow(["audio_filename", "transcript"])
-        for r in csv.DictReader(MANIFEST.open(newline="", encoding="utf-8")):
-            w.writerow([r["audio_filename"], results.get(r["audio_filename"], "")])
-    empty = sum(1 for v in results.values() if not v)
-    log(f"wrote {len(results)} rows; empty={empty}; failed={dict(FAILS) or 0}")
-    return exit_status(len(rows))
+        with MANIFEST.open(newline="", encoding="utf-8") as mf:
+            for r in csv.DictReader(mf):
+                name = r["audio_filename"]
+                text = clean_transcript(results.get(name, ""), (r.get("language") or "").strip())
+                w.writerow([name, text])
+                written += 1
+                empty += not text
+    return written, empty
 
 
 def exit_status(n_rows: int) -> int:
