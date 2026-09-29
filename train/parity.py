@@ -68,9 +68,10 @@ def main() -> int:
         loss = F.ctc_loss(lp, torch.tensor(ids, device=DEVICE), torch.tensor([h.shape[0]], device=DEVICE),
                           torch.tensor([len(ids)], device=DEVICE), blank=cfg.pad_token_id, reduction="mean", zero_infinity=True)
         top.eval()
-        print(f"{c.name}: {len(wav) / SR:.1f}s T={h.shape[0]} max|dlogit|={d:.2e} text_same={agree} "
-              f"fp16cache_same={t_16 == t_ref} ctc_loss(own text, train mode)={loss.item():.3f} dropped={dropped}\n"
-              f"   {t_ref[:120]!r}", flush=True)
+        # numbers only: never print decoded text (competition-data rule, 2026-09-29)
+        print(f"clip {len(wav) / SR:.1f}s T={h.shape[0]} max|dlogit|={d:.2e} text_same={agree} "
+              f"fp16cache_same={t_16 == t_ref} ctc_loss(own text, train mode)={loss.item():.3f} "
+              f"chars={len(t_ref)} dropped={dropped}", flush=True)
     print(f"PARITY {'OK' if agree_all and worst < 1e-2 else 'FAIL'}: worst max|dlogit| {worst:.2e}; "
           f"bottom speed {secs / max(tb, 1e-9):.1f}x realtime; gpu peak {(torch.cuda.max_memory_allocated() if DEVICE == 'cuda' else 0) / 2**30:.2f} GiB",
           flush=True)
