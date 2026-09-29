@@ -22,7 +22,8 @@ def main() -> int:
     ap.add_argument("--upto", type=int, default=52)
     ap.add_argument("--out", required=True)
     ap.add_argument("--nah-ortho", type=int, choices=[0, 1], default=1)
-    ap.add_argument("--omni-batch-s", type=float, default=1.0, help="lit.json omni_batch_s (1 = batch 1, no padding)")
+    ap.add_argument("--omni-batch-s", type=float, default=None,
+                    help="write lit.json omni_batch_s (omit: the stock batching, FINETUNE.md 11:05)")
     ap.add_argument("--note", default="")
     a = ap.parse_args()
 
@@ -63,7 +64,9 @@ def main() -> int:
     unused = set(ren) - used
     assert not unused, f"fine-tuned tensors not found in the checkpoint: {sorted(unused)[:5]}"
     meta = {"base": src.name, "finetuned_from_layer": a.upto, "tensors_replaced": len(used), "tensors_changed": changed,
-            "nah_ortho": bool(a.nah_ortho), "omni_batch_s": a.omni_batch_s, "note": a.note}
+            "nah_ortho": bool(a.nah_ortho), "note": a.note}
+    if a.omni_batch_s is not None:
+        meta["omni_batch_s"] = a.omni_batch_s
     (dst / "lit.json").write_text(json.dumps(meta, indent=1) + "\n")
     for sh in shards:
         h = hashlib.sha256((dst / sh).read_bytes()).hexdigest()
