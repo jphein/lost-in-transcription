@@ -75,9 +75,101 @@ def csvset(a) -> int:
     return 0
 
 
+MAP_TAGS = {"nhi", "mixed", "asl", "adapted-spanish-loan", "adapted_spanish_loan"}
+
+
+def tet_text(sentence: str, lid: str) -> str:
+    """Tetelancingo SMT orthography -> the competition's (u/k/s/j), per FINETUNE.md §9 09:10: map words
+    tagged Nahuatl / mixed / adapted loan with nahuatl.to_reference; keep Spanish and names as written."""
+    from nahuatl import to_reference
+
+    toks = [t for t in (lid or "").split() if "//" in t]
+    if toks:
+        out = []
+        for t in toks:
+            w, _, tag = t.rpartition("//")
+            out.append(to_reference(w) if tag.strip().lower() in MAP_TAGS else w)
+        return " ".join(out)
+    return to_reference(sentence)
+
+
+def tetelancingo(a) -> int:
+    rows = {"train": [], "test": []}
+    base = Path(a.tsv).parent
+    with open(a.tsv, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f, delimiter="\t"):
+            audio = Path(a.audio_dir) / r["audio_file"] if a.audio_dir else base / r["audio_file"]
+            ref = tet_text(r.get("sentence", ""), r.get("lid_tokens", ""))
+            split = (r.get("split") or "train").strip().lower()
+            rows.setdefault(split, []).append({"key": "tet_" + Path(r["audio_file"]).stem, "audio": str(audio.resolve()),
+                                               "ref": ref, "text": normalize(ref), "lang": "nhi", "convo": "tet"})
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for split, rs in rows.items():
+        if rs:
+            write_manifest(out / f"tet_{split}.jsonl", rs)
+            miss = sum(not Path(r["audio"]).exists() for r in rs)
+            print(f"tet_{split}: {len(rs)} rows, {sum(len(r['text'].split()) for r in rs)} words, missing audio {miss}")
+    return 0
+
+
+def _secs(t: str) -> float:
+    parts = [float(x) for x in str(t).strip().split(":")]
+    v = 0.0
+    for x in parts:
+        v = v * 60 + x
+    return v
+
+
+def jember(a) -> int:
+    """Jember sessions: cut utterances at the TSV timestamps, padded by PAD s each side (FINETUNE.md §9:
+    the timestamps are whole seconds, so a word at an edge would otherwise be cut); > 30 s or empty -> drop."""
+    rows, drop = [], Counter()
+    for tsv in sorted(Path(a.root).rglob("*.tsv")):
+        with open(tsv, newline="", encoding="utf-8") as f:
+            rd = csv.DictReader(f, delimiter="\t")
+            cols = {c.lower().strip(): c for c in rd.fieldnames or []}
+            c_file = next((cols[k] for k in cols if "file" in k or "audio" in k), None)
+            c_s, c_e = cols.get("start"), cols.get("end")
+            c_t = cols.get("text") or cols.get("transcript") or cols.get("sentence")
+            if not (c_file and c_s and c_e and c_t):
+                print(f"skip {tsv.name}: columns {rd.fieldnames}")
+                continue
+            for i, r in enumerate(rd):
+                ref = (r[c_t] or "").strip()
+                s0, e0 = _secs(r[c_s]), _secs(r[c_e])
+                if not ref:
+                    drop["empty"] += 1
+                    continue
+                if e0 - s0 > 30 or e0 <= s0:
+                    drop["len"] += 1
+                    continue
+                name = str(r[c_file]).strip()
+                cands = list(Path(a.root).rglob(name if name.endswith(".mp3") else name + ".mp3"))
+                if not cands:
+                    drop["no_audio"] += 1
+                    continue
+                rows.append({"key": f"jem_{Path(name).stem}_{i:04d}", "audio": str(cands[0].resolve()),
+                             "start": max(0.0, s0 - a.pad), "end": e0 + a.pad, "ref": ref, "text": normalize(ref),
+                             "lang": "jav", "convo": "jem_" + Path(name).stem})
+    rows.sort(key=lambda r: (r["audio"], r["start"]))  # cache.py decodes each session once
+    write_manifest(a.out, rows)
+    print(f"{a.out}: {len(rows)} utterances, {sum(r['end'] - r['start'] for r in rows) / 3600:.2f} h, "
+          f"{len({r['audio'] for r in rows})} sessions; dropped {dict(drop)}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    j = sub.add_parser("jember")
+    j.add_argument("--root", required=True)
+    j.add_argument("--pad", type=float, default=0.25)
+    j.add_argument("--out", required=True)
+    t = sub.add_parser("tetelancingo")
+    t.add_argument("--tsv", required=True)
+    t.add_argument("--audio-dir", default="")
+    t.add_argument("--out", required=True)
     c = sub.add_parser("csvset")
     c.add_argument("--dir", required=True)
     c.add_argument("--gt", required=True)
@@ -88,7 +180,7 @@ def main() -> int:
     d.add_argument("--track", choices=["nh", "jv"], required=True)
     d.add_argument("--out", required=True)
     a = ap.parse_args()
-    return {"dev": dev, "csvset": csvset}[a.cmd](a)
+    return {"dev": dev, "csvset": csvset, "tetelancingo": tetelancingo, "jember": jember}[a.cmd](a)
 
 
 if __name__ == "__main__":
