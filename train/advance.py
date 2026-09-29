@@ -46,8 +46,11 @@ def main() -> int:
     cfg = Wav2Vec2Config.from_pretrained(a.model)
     cfg._attn_implementation = "sdpa"
     D = cfg.hidden_size
-    with torch.device(DEVICE):  # fp16 storage, each layer upcast to fp32 only while it runs (small cards)
-        layers = torch.nn.ModuleList([Wav2Vec2EncoderLayerStableLayerNorm(cfg) for _ in range(a.b - a.a)]).eval().half()
+    # fp16 storage, each layer upcast to fp32 only while it runs (small cards). Built on the meta device and
+    # materialised in fp16, so there is no transient fp32 copy of all the layers on the card.
+    with torch.device("meta"):
+        layers = torch.nn.ModuleList([Wav2Vec2EncoderLayerStableLayerNorm(cfg) for _ in range(a.b - a.a)])
+    layers = layers.to(dtype=torch.float16).to_empty(device=DEVICE).eval()
 
     def up(mod, args):
         for p in mod.parameters():
