@@ -68,7 +68,7 @@ def main() -> int:
     if a.omni_batch_s is not None:
         meta["omni_batch_s"] = a.omni_batch_s
     (dst / "lit.json").write_text(json.dumps(meta, indent=1) + "\n")
-    for sh in shards:  # streamed: read_bytes() of a 5 GB shard blew a 6G cap (familiar, 13:39:53)
+    for sh in shards:  # streamed: read_bytes() of a 5 GB shard blew a 6G memory cap
         h = hashlib.sha256()
         with open(dst / sh, "rb") as f:
             for chunk in iter(lambda: f.read(16 << 20), b""):
