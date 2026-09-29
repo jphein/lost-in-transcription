@@ -73,7 +73,7 @@ def main() -> int:
 
     t0 = time.time()
     proc = AutoProcessor.from_pretrained(a.model)
-    m = load_fp16_upcast(a.model)
+    m = load_fp16_upcast(a.model, keep_layers=a.upto)
     print(f"model loaded in {time.time() - t0:.0f}s; gpu mem {torch.cuda.memory_allocated() / 2**30:.2f} GiB", flush=True)
 
     cur_audio, cur_wav = None, None
