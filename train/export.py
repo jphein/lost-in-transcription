@@ -68,9 +68,12 @@ def main() -> int:
     if a.omni_batch_s is not None:
         meta["omni_batch_s"] = a.omni_batch_s
     (dst / "lit.json").write_text(json.dumps(meta, indent=1) + "\n")
-    for sh in shards:
-        h = hashlib.sha256((dst / sh).read_bytes()).hexdigest()
-        print(f"{sh} sha256 {h}")
+    for sh in shards:  # streamed: read_bytes() of a 5 GB shard blew a 6G cap (familiar, 13:39:53)
+        h = hashlib.sha256()
+        with open(dst / sh, "rb") as f:
+            for chunk in iter(lambda: f.read(16 << 20), b""):
+                h.update(chunk)
+        print(f"{sh} sha256 {h.hexdigest()}")
     print(f"EXPORT_DONE {dst}: {json.dumps(meta)}")
     return 0
 
