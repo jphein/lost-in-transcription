@@ -232,7 +232,8 @@ def run_omni(rows, results, model=None, load=None):
             return decode_audio(str(CLIPS_DIR / name), sampling_rate=16000)
 
     m = model
-    budget = float(os.environ.get("LIT_OMNI_BATCH_S", 240))
+    # a fine-tuned model can ask for batch 1 (lit.json omni_batch_s: 1): no zero padding without a mask
+    budget = float(os.environ.get("LIT_OMNI_BATCH_S", OMNI_CFG.get("omni_batch_s", 240)))
     step = 64
     for k in range(0, len(rows), step):
         group = rows[k : k + step]

@@ -53,6 +53,41 @@ class LitJson(unittest.TestCase):
                 self.assertEqual(reload_with(Path(d)).NAHUATL, NAH, body)
 
 
+class BatchBudget(unittest.TestCase):
+    def tearDown(self):
+        importlib.reload(main)
+
+    def _budget_seen(self, m):
+        seen = {}
+
+        class Fake:
+            budget_s, oom_retries = None, 0
+
+            def transcribe_many(self, wavs, max_batch_s=240.0):
+                seen["b"] = max_batch_s
+                return ["kuali"] * len(wavs)
+
+        rows = [{"audio_filename": "a.mp3", "language": "nhi"}]
+        m.run_omni(rows, {}, model=Fake(), load=lambda name: [0.0] * 16000)
+        return seen["b"]
+
+    def test_lit_json_batch_budget_is_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "lit.json").write_text(json.dumps({"omni_batch_s": 1}))
+            self.assertEqual(self._budget_seen(reload_with(Path(d))), 1.0)
+
+    def test_stock_budget_without_lit_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._budget_seen(reload_with(Path(d))), 240.0)
+
+    def test_env_budget_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "lit.json").write_text(json.dumps({"omni_batch_s": 1}))
+            m = reload_with(Path(d), LIT_OMNI_BATCH_S="60")
+            with mock.patch.dict(os.environ, {"LIT_OMNI_BATCH_S": "60"}):
+                self.assertEqual(self._budget_seen(m), 60.0)
+
+
 class PickOmni(unittest.TestCase):
     def test_finetuned_dir_is_preferred(self):
         with tempfile.TemporaryDirectory() as d:
