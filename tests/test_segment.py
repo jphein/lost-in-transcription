@@ -36,6 +36,12 @@ class Join(unittest.TestCase):
     def test_apart_form_wins_when_references_prefer_it(self):
         self.assertEqual(segment.join_words("tel chikauak", UNI, Counter({("tel", "chikauak"): 5})), "tel chikauak")
 
+    def test_a_tie_is_not_joined(self):
+        self.assertEqual(segment.join_words("tel chikauak", UNI, Counter({("tel", "chikauak"): 3})), "tel chikauak")
+
+    def test_join_needs_minc_occurrences_of_the_joined_form(self):
+        self.assertEqual(segment.join_words("tel chikauak", Counter({"telchikauak": 1}), Counter()), "tel chikauak")
+
     def test_never_joins_across_punctuation(self):
         self.assertEqual(segment.join_words("tel, chikauak", UNI, BI), "tel, chikauak")
 
@@ -52,6 +58,17 @@ class Wiring(unittest.TestCase):
             self.assertEqual(segment.fix_boundaries("kikuijya tel chikauak"), "kikuijya telchikauak")  # join only
             self.assertEqual(segment.fix_boundaries("kikuijya tel chikauak", split=True), "kikuij ya telchikauak")
         segment.load()  # back to the shipped vocabulary
+
+    def test_main_never_asks_for_split(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "v.tsv"
+            segment.save(p, UNI, BI)
+            segment.load(p)
+            try:  # with this vocabulary split would give "kikuij ya"; the shipped path must leave it alone
+                self.assertEqual(main.nahuatl_orthography("kikuijya"), "kikuijya")
+                self.assertEqual(main.nahuatl_orthography("tel chikauak"), "telchikauak")
+            finally:
+                segment.load()
 
     def test_shipped_path_joins_but_never_splits(self):
         if not segment.load():

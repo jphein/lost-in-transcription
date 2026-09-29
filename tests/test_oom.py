@@ -108,6 +108,7 @@ class RunOmniAccounting(unittest.TestCase):
         results = {}
         main.run_omni(self.rows(70), results, model=FakeOmni(fits_s=30), load=lambda n: wav(4))
         self.assertTrue(all(results.values()) and len(results) == 70)
+        self.assertEqual(set(results.values()), {"wempat"})  # routed through reference_style (jav: digits)
         self.assertEqual(dict(main.FAILS), {})
         self.assertEqual(main.exit_status(70), 0)
 

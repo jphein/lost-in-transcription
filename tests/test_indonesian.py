@@ -15,7 +15,8 @@ class Numbers(unittest.TestCase):
                  20: "dua puluh", 21: "dua puluh satu", 100: "seratus", 101: "seratus satu", 110: "seratus sepuluh",
                  111: "seratus sebelas", 200: "dua ratus", 1000: "seribu", 1100: "seribu seratus",
                  2018: "dua ribu delapan belas", 10000: "sepuluh ribu", 11000: "sebelas ribu",
-                 100000: "seratus ribu", 1000000: "satu juta", 2500000: "dua juta lima ratus ribu"}
+                 100000: "seratus ribu", 1000000: "satu juta", 2500000: "dua juta lima ratus ribu",
+                 10 ** 9: "satu miliar", 2 * 10 ** 9 + 5: "dua miliar lima", 10 ** 12: "satu triliun"}
         for n, want in cases.items():
             self.assertEqual(ind.number_words(n), want, n)
 
@@ -34,13 +35,17 @@ class References(unittest.TestCase):
 
 class Dispatch(unittest.TestCase):
     def test_only_indonesian_codes_are_touched(self):
-        self.assertIn("javind", main.INDONESIAN)
-        self.assertEqual(main.reference_style("kelas 2 sma", "javind"), "kelas dua SMA")
-        self.assertEqual(main.reference_style("kelas 2 sma", "ind"), "kelas dua SMA")
-        self.assertEqual(main.reference_style("kelas 2 sma", "enspa"), "kelas 2 sma")
+        self.assertEqual(main.INDONESIAN, {"ind", "jav", "javind"})
+        for code in ("ind", "jav", "javind"):
+            self.assertEqual(main.reference_style("kelas 2 sma", code), "kelas dua SMA", code)
+        for code in ("enspa", "spa", "eng"):
+            self.assertEqual(main.reference_style("kelas 2 sma", code), "kelas 2 sma", code)
 
     def test_nahuatl_codes_take_the_nahuatl_path(self):
-        self.assertEqual(main.reference_style("sma", "nhw"), main.nahuatl_orthography("sma"))
+        # "quemah" is one the Nahuatl mapping changes (qu -> k, h -> j), so an emptied NAHUATL set fails here
+        for code in ("azz", "nhw", "nhi"):
+            self.assertEqual(main.reference_style("quemah", code), "kemaj", code)
+        self.assertEqual(main.reference_style("quemah", "enspa"), "quemah")
 
 
 if __name__ == "__main__":
