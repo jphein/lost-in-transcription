@@ -271,6 +271,8 @@ def main() -> int:
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--init", default="", help="load the top's weights from this .pt (best.pt) before anything else")
     ap.add_argument("--seg-vocab", default="", help="segment.load() this vocab first (e.g. a V-excluded nah_vocab)")
+    ap.add_argument("--stop-after", type=int, default=0,
+                    help="keep the --epochs LR schedule but stop after this epoch (F = C's recipe up to C's pick)")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--max-steps", type=int, default=0, help="stop after N optimiser steps (smoke tests)")
     ap.add_argument("--amp", choices=["none", "bf16"], default="none",
@@ -433,6 +435,9 @@ def main() -> int:
             (out / "best.pt.tmp").replace(out / "best.pt")
             log(event="best", epoch=epoch, wer=round(w, 4))
         save_last(epoch + 1, 0)
+        if a.stop_after and epoch >= a.stop_after:
+            log(event="stop_after", epoch=epoch)
+            break
     log(event="TRAIN_DONE", best=round(best, 4))
     return 0
 
