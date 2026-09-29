@@ -257,6 +257,7 @@ def main() -> int:
     ap.add_argument("--accum", type=int, default=4)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-only", action="store_true")
+    ap.add_argument("--init", default="", help="load the top's weights from this .pt (best.pt) before anything else")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--max-steps", type=int, default=0, help="stop after N optimiser steps (smoke tests)")
     ap.add_argument("--amp", choices=["none", "bf16"], default="none",
@@ -293,6 +294,9 @@ def main() -> int:
     vocab = Vocab(a.model)
     proc = AutoProcessor.from_pretrained(a.model)
     top, cfg = build_top(a.model, a.upto, device)
+    if a.init:
+        top.load_state_dict(torch.load(a.init, map_location=device, weights_only=True))
+        log(event="init", path=a.init)
     val = Cache(a.val, D)
     val2 = Cache(a.val2, D) if a.val2 else None
 
