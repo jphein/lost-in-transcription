@@ -5,6 +5,7 @@ One zip serves all three tracks; the track is inferred from the manifest's
 """
 
 import csv
+import json
 import os
 import re
 import sys
@@ -32,13 +33,24 @@ WHISPER_DIR = MODELS / os.environ.get("LIT_WHISPER", "faster-whisper-large-v3")
 def _pick_omni() -> Path:
     if os.environ.get("LIT_OMNI"):
         return MODELS / os.environ["LIT_OMNI"]
-    for name in ("omni-7b-v2-fp16", "omni-3b-v2-fp16", "omni-1b-v2-fp16"):
+    # omni-3b-ft: a fine-tuned copy of omni-3b-v2-fp16 written by train/export.py
+    for name in ("omni-3b-ft", "omni-7b-v2-fp16", "omni-3b-v2-fp16", "omni-1b-v2-fp16"):
         if (MODELS / name).exists():
             return MODELS / name
     return MODELS / "omni-missing"
 
 
+def _omni_cfg(d: Path) -> dict:
+    """Optional lit.json beside a fine-tuned model (train/export.py); unreadable means defaults."""
+    try:
+        cfg = json.loads((d / "lit.json").read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 OMNI_DIR = _pick_omni()
+OMNI_CFG = _omni_cfg(OMNI_DIR)
 QWEN_DIR = MODELS / os.environ.get("LIT_QWEN", "qwen3-asr-1.7b")
 HAVE_W, HAVE_O, HAVE_Q = WHISPER_DIR.exists(), OMNI_DIR.exists(), QWEN_DIR.exists()
 # Qwen3-ASR language names (no Javanese / Nahuatl support)
@@ -62,12 +74,17 @@ LANG_MAP = {
     "ind": "id", "jav": "jw", "javind": "id",
     "azz": "es", "nhw": "es", "nhi": "es",  # no Nahuatl in whisper; es phonetics closest
 }
-NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", "1") == "1" else set()
-# Word-boundary repair after the orthography mapping (segment.py + nah_vocab.tsv); LIT_NAH_SEG=0 turns it off.
-NAH_SEG = os.environ.get("LIT_NAH_SEG", "1") == "1"
+# a model fine-tuned on reference-orthography targets may not want the map ({"nah_ortho": false})
+_NAH_DEFAULT = "1" if OMNI_CFG.get("nah_ortho", True) is not False else "0"
+NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", _NAH_DEFAULT) == "1" else set()
+# Word-boundary repair after the orthography mapping (segment.py + nah_vocab.tsv); LIT_NAH_SEG=0 turns it off
+# (a fine-tuned model can also switch it off with lit.json {"nah_seg": false}).
+_SEG_DEFAULT = "1" if OMNI_CFG.get("nah_seg", True) is not False else "0"
+NAH_SEG = os.environ.get("LIT_NAH_SEG", _SEG_DEFAULT) == "1"
 # Indonesian/Javanese reference conventions (indonesian.py: digits spelled out, acronyms, proper nouns);
-# LIT_ID_POST=0 turns it off.
-INDONESIAN = {"ind", "jav", "javind"} if os.environ.get("LIT_ID_POST", "1") == "1" else set()
+# LIT_ID_POST=0 turns it off (lit.json {"id_post": false} too).
+_ID_DEFAULT = "1" if OMNI_CFG.get("id_post", True) is not False else "0"
+INDONESIAN = {"ind", "jav", "javind"} if os.environ.get("LIT_ID_POST", _ID_DEFAULT) == "1" else set()
 
 # Short vocabulary priming per track (initial_prompt). Kept tiny: long prompts
 # make whisper hallucinate on short clips.
@@ -129,10 +146,17 @@ def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
 
 
+NAH_CODES = {"azz", "nhw", "nhi"}
+
+
 def reference_style(text: str, code: str) -> str:
     """Write a transcript the way the references for its language are written."""
     if code in NAHUATL:
         return nahuatl_orthography(text)
+    if code in NAH_CODES and NAH_SEG:  # the map is off (a fine-tuned model): the word-boundary repair still runs
+        from segment import fix_boundaries
+
+        return fix_boundaries(text)
     if code in INDONESIAN:
         from indonesian import to_reference
 
@@ -239,7 +263,8 @@ def run_omni(rows, results, model=None, load=None):
             return decode_audio(str(CLIPS_DIR / name), sampling_rate=16000)
 
     m = model
-    budget = float(os.environ.get("LIT_OMNI_BATCH_S", 240))
+    # a fine-tuned model can ask for batch 1 (lit.json omni_batch_s: 1): no zero padding without a mask
+    budget = float(os.environ.get("LIT_OMNI_BATCH_S", OMNI_CFG.get("omni_batch_s", 240)))
     step = 64
     for k in range(0, len(rows), step):
         group = rows[k : k + step]
