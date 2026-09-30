@@ -262,6 +262,7 @@ def main() -> int:
     ap.add_argument("--train", nargs="*", default=[])
     ap.add_argument("--val", required=True)
     ap.add_argument("--val2", default="")
+    ap.add_argument("--val-keys", default="", help="restrict --val to the clips of this manifest (LOCO folds)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--lr", type=float, default=3e-5)
@@ -321,6 +322,10 @@ def main() -> int:
         top.load_state_dict(torch.load(a.init, map_location=device, weights_only=True))
         log(event="init", path=a.init)
     val = Cache(a.val, D)
+    if a.val_keys:
+        want = {json.loads(l)["key"] for l in Path(a.val_keys).read_text(encoding="utf-8").splitlines() if l.strip()}
+        val.rows = [r for r in val.rows if r["clip"] in want]
+        log(event="val_keys", path=a.val_keys, pieces=len(val.rows))
     val2 = Cache(a.val2, D) if a.val2 else None
 
     def run_eval(epoch, tag=""):
