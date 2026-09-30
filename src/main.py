@@ -63,6 +63,11 @@ LANG_MAP = {
     "azz": "es", "nhw": "es", "nhi": "es",  # no Nahuatl in whisper; es phonetics closest
 }
 NAHUATL = {"azz", "nhw", "nhi"} if os.environ.get("LIT_NAH_ORTHO", "1") == "1" else set()
+# Word-boundary repair after the orthography mapping (segment.py + nah_vocab.tsv); LIT_NAH_SEG=0 turns it off.
+NAH_SEG = os.environ.get("LIT_NAH_SEG", "1") == "1"
+# Indonesian/Javanese reference conventions (indonesian.py: digits spelled out, acronyms, proper nouns);
+# LIT_ID_POST=0 turns it off.
+INDONESIAN = {"ind", "jav", "javind"} if os.environ.get("LIT_ID_POST", "1") == "1" else set()
 
 # Short vocabulary priming per track (initial_prompt). Kept tiny: long prompts
 # make whisper hallucinate on short clips.
@@ -124,26 +129,26 @@ def log(msg: str) -> None:
     print(f"[{time.time() - T0:7.1f}s] {msg}", flush=True)
 
 
+def reference_style(text: str, code: str) -> str:
+    """Write a transcript the way the references for its language are written."""
+    if code in NAHUATL:
+        return nahuatl_orthography(text)
+    if code in INDONESIAN:
+        from indonesian import to_reference
+
+        return to_reference(text)
+    return text
+
+
 def nahuatl_orthography(text: str) -> str:
-    """Map to the reference convention: u for /w/, k for /k/, s for /s/.
+    from nahuatl import to_reference
 
-    Applied only to words that don't look like Spanish (heuristic: contains
-    Nahuatl-typical clusters). Spanish words keep standard orthography.
-    """
-    def fix(word: str) -> str:
-        w = word
-        low = w.lower()
-        if not re.search(r"(tl|tz|hu|uh|kw|cu[aeio]|x|ts|w)", low):
-            return w
-        w = re.sub(r"hu|uh|w", "u", w)
-        w = re.sub(r"Hu|W", "U", w)
-        w = re.sub(r"qu(?=[ei])", "k", w)
-        w = re.sub(r"c(?=[aou])|c$|c(?=[^aeiouh])", "k", w)
-        w = re.sub(r"z|c(?=[ei])", "s", w)
-        w = w.replace("tz", "ts")
-        return w
+    text = to_reference(text)
+    if NAH_SEG:
+        from segment import fix_boundaries
 
-    return " ".join(fix(t) for t in text.split())
+        text = fix_boundaries(text)
+    return text
 
 
 def run_whisper(rows, results):
@@ -176,7 +181,7 @@ def run_whisper(rows, results):
                 vad_filter=True,
             )
             text = " ".join(s.text.strip() for s in segs).strip()
-            results[name] = nahuatl_orthography(text) if code in NAHUATL else text
+            results[name] = reference_style(text, code)
         except Exception as e:  # never let one clip kill the run
             results[name] = ""
             # unreadable audio (PyAV) is "decode", as in run_omni: not a model failure
@@ -211,7 +216,7 @@ def run_whisper(rows, results):
             RESCUE[f"retry_{type(e).__name__}"] += 1
             continue
         if text:
-            results[name] = nahuatl_orthography(text) if code in NAHUATL else text
+            results[name] = reference_style(text, code)
             RESCUE["whisper_novad"] += 1
     if todo:
         log(f"whisper retry: {len(todo)} empty clip(s), {RESCUE['whisper_novad']} recovered")
@@ -271,7 +276,7 @@ def run_omni(rows, results, model=None, load=None):
         for r, t in zip(ok, texts):
             code = (r.get("language") or "").strip()
             t = t or ""
-            results[r["audio_filename"]] = nahuatl_orthography(t) if code in NAHUATL else t
+            results[r["audio_filename"]] = reference_style(t, code)
         log(f"omni done {min(k + step, len(rows))}/{len(rows)}; budget={getattr(m, 'budget_s', None)}s oom_retries={getattr(m, 'oom_retries', 0)}")
     del m
 
